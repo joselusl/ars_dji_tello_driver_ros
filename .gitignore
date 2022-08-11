@@ -1,0 +1,6 @@
+# Catkin custom files
+CATKIN_IGNORE
+
+*__pycache__
+*.vscode
+*.DS_Store
