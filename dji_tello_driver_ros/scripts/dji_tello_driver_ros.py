@@ -56,7 +56,7 @@ class DjiTelloDriverRos(object):
     _battery_percentage_timer_interval = 5.0
 
     # Params
-    _connect_to_tello_wifi_auto = True
+    _connect_to_tello_wifi_auto = False
     tello_ssid = None
     tello_pw = None
 
@@ -68,6 +68,8 @@ class DjiTelloDriverRos(object):
 
     #
     _flight_data = None
+    #
+    fly_mode = None
     #
     _current_battery_percentage = 0
     
@@ -157,13 +159,20 @@ class DjiTelloDriverRos(object):
     def read_params(self):
         print("[info] - Reading parameters")
 
-        self.tello_ssid = rospy.get_param("/tello_driver_node/tello_ssid", default=self.tello_ssid)
-        self.tello_pw = rospy.get_param("/tello_driver_node/tello_pw", default=self.tello_pw)
-        self._connect_to_tello_wifi_auto = rospy.get_param("/tello_driver_node/connect_to_tello_wifi_auto", default=self._connect_to_tello_wifi_auto)
+        self.tello_ssid = rospy.get_param("tello_ssid", default=self.tello_ssid)
+        self.tello_pw = rospy.get_param("tello_pw", default=self.tello_pw)
+        self._connect_to_tello_wifi_auto = rospy.get_param("connect_to_tello_wifi_auto", default=self._connect_to_tello_wifi_auto)
         
         print("[info] - Finished reading parameters")
 
         # End
+        return
+
+
+    def run(self):
+
+        rospy.spin()
+
         return
 
 
@@ -342,6 +351,14 @@ class DjiTelloDriverRos(object):
         # Reading some parameters
         # Flight data
         self._flight_data = flight_data
+
+        # Flight mode
+        # 1: hovering
+        # 6: landed
+        # 11: taking-off
+        # 12: landing
+        self.fly_mode = flight_data.fly_mode
+        
         # Battery percentage
         self._current_battery_percentage = flight_data.battery_percentage
 
