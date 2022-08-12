@@ -1,6 +1,10 @@
 # Catkin custom files
 CATKIN_IGNORE
 
+# Compile
+*.pyc
 *__pycache__
+
+# Others
 *.vscode
 *.DS_Store

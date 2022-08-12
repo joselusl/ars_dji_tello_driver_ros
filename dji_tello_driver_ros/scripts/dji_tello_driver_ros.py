@@ -1,65 +1,77 @@
-#! /usr/bin/env python3
+#! /usr/bin/env python
 
-# - Start of imports
+import numpy as np
 
 import threading
 import time
 import av
 import cv2
-import numpy as np
 
-from tellopy import Tello
+
+# ROS Imports
+import rospy
+import rospkg
+
 from cv_bridge import CvBridge
 
-# - ROS Imports
-import rospy
-
-from sensor_msgs.msg import Image
 from std_msgs.msg import Empty
-from tello_msgs.msg import FlightData, FlipControl
+from std_msgs.msg import Bool, Header
+from sensor_msgs.msg import Image
+from geometry_msgs.msg import TwistStamped
+
+from dji_tello_msgs.msg import FlightData, FlipControl
+
+
+from tellopy import Tello
+
+
 from utils import connect_wifi_device as cwd
 
-# - End of imports
 
 
-class TelloDriver(object):
+
+class DjiTelloDriverRos(object):
+
+    #
     _frame_skip = 300  # - skip the first 300 frames to avoid inital lag
 
     # Tello WiFi credentials
     tello_ssid = None
     tello_pw = None
 
-    # - Subscribers
+    # Subscribers
+    tello_vel_cmd_stamped_sub = None
+    flag_tello_control_enabling_sub = None
     tello_takeoff_sub = None
     tello_land_sub = None
     tello_flip_controll_sub = None
 
-    # - Topics
-    tello_takeoff_topic_name = "/tello/takeoff"
-    tello_flip_control_topic_name = "/tello/flip_control"
-    tello_land_topic_name = "/tello/land"
-    tello_image_topic_name = "/tello/camera/image_raw"
-    tello_flight_data_topic_name = "/tello/flight_data"
+    #
+    flag_tello_control_enabled = None
+
 
     # - Timers
     _battery_percentage_display_timer = None
-    _battery_percentage_timer_interval = (
-        5.0  # will display to screen battery percentage every 5 seconds
-    )
-    _current_battery_percentage = 0
+    # will display to screen battery percentage every 5 seconds
+    _battery_percentage_timer_interval = 5.0
 
-    # - Flags
+    # Params
     _connect_to_tello_wifi_auto = True
-    _collision_detected_flag = False
-    _tello_vel_cmd_flag = {
-        "lin": {"x": True, "y": True, "z": True},
-        "ang": {"z": True},
-    }
-    drone_x_vel = 0
-    drone_y_vel = 0
-    drone_z_vel = 0
+    tello_ssid = None
+    tello_pw = None
 
-    curr_time = time.time()
+
+    #
+    _stop_request = None
+    _video_thread = None
+
+
+    #
+    _flight_data = None
+    #
+    _current_battery_percentage = 0
+    
+
 
     def __init__(self):
 
@@ -73,105 +85,148 @@ class TelloDriver(object):
         # - Setting shutdown routine
         rospy.on_shutdown(self._shutdown_routine)
 
-    def begin(self):
-        print("[info] [Tello_driver] - Initiating Tello driver")
+        #
+        self.flag_tello_control_enabled = True
+
+
+        # End
+        return
+
+
+    def init(self, node_name='dji_tello_driver_ros_node'):
+
+        # Init ROS
+        rospy.init_node(node_name, anonymous=True)
+
+        
+        # Package path
+        pkg_path = rospkg.RosPack().get_path('dji_tello_driver_ros')
+        
+
+        #### READING PARAMETERS ###
+
+        # Read params
         self.read_params()
 
+
+        # Connect to Tello Network
         self._connect_to_tello_network()
 
-        self._init_pub()
-        self._init_sub()
-        self._init_timers()
+        
+        # End
+        return
 
+
+    def open(self):
+        
+        # Publishers
+        #
+        self._image_pub = rospy.Publisher("camera/image_raw", Image, queue_size=1)
+        #
+        self._flight_data_pub = rospy.Publisher("flight_data", FlightData, queue_size=1)
+
+
+        # Subscribers
+        #
+        self.tello_vel_cmd_stamped_sub = rospy.Subscriber("cmd_vel_stamped", TwistStamped, self.tello_vel_cmd_stamped_callback)
+        #
+        self.flag_tello_control_enabling_sub = rospy.Subscriber("flag_tello_control_enabled", Bool, self.tello_control_enabling_callback)
+        #
+        self.tello_takeoff_sub = rospy.Subscriber("takeoff", Empty, self._takeoff_callback, queue_size=1)
+        #
+        self.tello_land_sub = rospy.Subscriber("land", Empty, self._land_callback, queue_size=1)
+        #
+        self.tello_flip_controll_sub = rospy.Subscriber("flip_control", FlipControl, self._flip_control_callback, queue_size=1)
+
+        
+        # Timers
+        self._battery_percentage_display_timer = rospy.Timer(rospy.Duration(self._battery_percentage_timer_interval), self._battery_percentage_display_timer_callback)
+
+
+        # Video thread
         self._start_video_threads()
 
-    def _init_pub(self):
-        print(
-            f"[info] [Tello_driver] - Publishing drone image to <{self.tello_image_topic_name}>"
-        )
-        self._image_pub = rospy.Publisher(
-            self.tello_image_topic_name, Image, queue_size=1
-        )
-        print(
-            f"[info] [Tello_driver] - Publishing drone flight data to <{self.tello_flight_data_topic_name}>"
-        )
-        self._flight_data_pub = rospy.Publisher(
-            self.tello_flight_data_topic_name, FlightData, queue_size=1
-        )
-
-    def _init_sub(self):
-        print(
-            f"[info] [Tello_driver] - Subscribing to <{self.tello_takeoff_topic_name} topic>"
-        )
-        self.tello_takeoff_sub = rospy.Subscriber(
-            self.tello_takeoff_topic_name, Empty, self._takeoff_callback, queue_size=1
-        )
-
-        print(
-            f"[info] [Tello_driver] - Subscribing to <{self.tello_land_topic_name} topic>"
-        )
-        self.tello_land_sub = rospy.Subscriber(
-            self.tello_land_topic_name, Empty, self._land_callback, queue_size=1
-        )
-
-        print(
-            f"[info] [Tello_driver] - Subscribing to <{self.tello_flip_control_topic_name} topic>"
-        )
-        rospy.Subscriber(
-            self.tello_flip_control_topic_name,
-            FlipControl,
-            self._flip_control_callback,
-            queue_size=1,
-        )
-
+        # Tello Flight data
         self._tello.subscribe(self._tello.EVENT_FLIGHT_DATA, self._flight_data_handler)
 
-    def _init_timers(self):
-        self._battery_percentage_display_timer = rospy.Timer(
-            rospy.Duration(self._battery_percentage_timer_interval),
-            self._battery_percentage_display_timer_callback,
-        )
+
+        # End
+        return
+
 
     def read_params(self):
         print("[info] - Reading parameters")
-        self.tello_ssid = rospy.get_param(
-            "/tello_driver_node/tello_ssid", default=self.tello_ssid
-        )
 
-        self.tello_pw = rospy.get_param(
-            "/tello_driver_node/tello_pw", default=self.tello_pw
-        )
-        self._connect_to_tello_wifi_auto = rospy.get_param(
-            "/tello_driver_node/connect_to_tello_wifi_auto",
-            default=self._connect_to_tello_wifi_auto,
-        )
+        self.tello_ssid = rospy.get_param("/tello_driver_node/tello_ssid", default=self.tello_ssid)
+        self.tello_pw = rospy.get_param("/tello_driver_node/tello_pw", default=self.tello_pw)
+        self._connect_to_tello_wifi_auto = rospy.get_param("/tello_driver_node/connect_to_tello_wifi_auto", default=self._connect_to_tello_wifi_auto)
+        
         print("[info] - Finished reading parameters")
 
+        # End
+        return
+
+
+    def close(self):
+
+
+        # End
+        return
+
+
+    def tello_vel_cmd_stamped_callback(self, twist_msg):
+
+        #
+        if(self.flag_tello_control_enabled is False):
+            return
+
+        # Cmd
+        lin_vel_cmd = np.zeros((3,), dtype=float)
+        lin_vel_cmd[0] = twist_msg.twist.linear.x
+        lin_vel_cmd[1] = twist_msg.twist.linear.y
+        lin_vel_cmd[2] = twist_msg.twist.linear.z
+
+        alg_vel_cmd = np.zeros((3,), dtype=float)
+        alg_vel_cmd[0] = twist_msg.twist.angular.x
+        alg_vel_cmd[1] = twist_msg.twist.angular.y
+        alg_vel_cmd[2] = twist_msg.twist.angular.z
+
+        # Set
+        self.set_cmd_vel(lin_vel_cmd, alg_vel_cmd)
+
+        # End
+        return
+
+
+    def tello_control_enabling_callback(self, msg):
+
+        self.flag_tello_control_enabled = msg.data
+
+        if(self.flag_tello_control_enabled is False):
+            self.set_cmd_hover()
+
+        return
+
+
     def set_cmd_vel(self, lin_cmd_vel, ang_cmd_vel):
-        # if self._collision_detected_flag:
         self._tello.set_pitch(lin_cmd_vel[0])  # linear X value
         self._tello.set_roll(-lin_cmd_vel[1])  # linear Y value
         self._tello.set_throttle(lin_cmd_vel[2])  # linear Z value
         self._tello.set_yaw(-ang_cmd_vel[2])  # angular Z value
 
-    def set_collision_detected_flag(self, flag):
-        self._collision_detected_flag = flag
-        if self._collision_detected_flag:
-            print("[info] [Tello_driver] - Coollision detected")
+        # End
+        return
 
-    def get_tello_vel(self):
-        return {
-            "lin": {
-                "x": self.drone_x_vel,
-                "y": self.drone_y_vel,
-                "z": self.drone_z_vel,
-            },
-            "ang": {
-                "x": 0,
-                "y": 0,
-                "z": 0,
-            },
-        }
+
+    def set_cmd_hover(self):
+        self._tello.set_pitch(0.0)  # linear X value
+        self._tello.set_roll(0.0)  # linear Y value
+        self._tello.set_throttle(0.0)  # linear Z value
+        self._tello.set_yaw(0.0)  # angular Z value
+
+        # End
+        return
+
 
     # +--------------------+
     # | Start of Callbacks |
@@ -182,17 +237,24 @@ class TelloDriver(object):
         print("[info] [Tello_driver] - Taking off")
         self._tello.takeoff()
 
+        # End
+        return
+
+
     def _land_callback(self, msg):
         msg  # - just for not having linting errors
         print("[info] [Tello_driver] - Landing")
         self._tello.land()
 
-    def _battery_percentage_display_timer_callback(self, msg):
-        print(
-            f"[info] [Tello_driver] - Drone's battery percentage is {self._current_battery_percentage}%"
-        )
+        # End
+        return
+
 
     def _flip_control_callback(self, msg):
+        #
+        if(self.flag_tello_control_enabled is False):
+            return
+
         print("[info] [Tello_driver] - Performing a flip")
         if msg.flip_forward:
             self._tello.flip_forward()
@@ -202,6 +264,17 @@ class TelloDriver(object):
             self._tello.flip_left()
         elif msg.flip_right:
             self._tello.flip_right()
+
+        # End
+        return
+
+
+    def _battery_percentage_display_timer_callback(self, msg):
+        print(f"[info] [Tello_driver] - Drone's battery percentage is {self._current_battery_percentage}%")
+
+        # End
+        return
+
 
     def _flight_data_handler(self, event, sender, data):
         flight_data = FlightData()
@@ -265,13 +338,19 @@ class TelloDriver(object):
         flight_data.wifi_disturb = data.wifi_disturb
         flight_data.wifi_strength = data.wifi_strength
 
-        self._current_battery_percentage = flight_data.battery_percentage
-        self.drone_x_vel = flight_data.north_speed
-        self.drone_y_vel = flight_data.east_speed
-        self.drone_z_vel = flight_data.ground_speed
 
-        # - Publish Flight data
+        # Reading some parameters
+        # Flight data
+        self._flight_data = flight_data
+        # Battery percentage
+        self._current_battery_percentage = flight_data.battery_percentage
+
+
+        # Publish Flight data
         self._flight_data_pub.publish(flight_data)
+
+        # End
+        return
 
     # +------------------+
     # | End of Callbacks |
@@ -282,6 +361,10 @@ class TelloDriver(object):
         self._stop_request = threading.Event()
         self._video_thread = threading.Thread(target=self._video_worker_loop)
         self._video_thread.start()
+
+        # End
+        return
+
 
     def _video_worker_loop(self):
         # get video stream, open with PyAV
@@ -315,18 +398,30 @@ class TelloDriver(object):
             if self._stop_request.isSet():
                 return
 
+        # End
+        return
+
+
     def _shutdown_routine(self):
+        print("[info] Shuting down DJI Tello")
+
         # force a landing
         self._tello.land()
 
+        # Wait until it lands
         time.sleep(2)
+
+        # stop the video thread
+        if(self._video_thread is not None):
+            self._stop_request.set()
+            self._video_thread.join(timeout=2)
 
         # shut down the drone
         self._tello.quit()
 
-        # stop the video thread
-        self._stop_request.set()
-        self._video_thread.join(timeout=2)
+        # End
+        return
+
 
     def _connect_to_tello_network(self):
         print("[info] [Tello_driver] - Connecting to drone")
@@ -339,3 +434,6 @@ class TelloDriver(object):
         self._tello.connect()
         self._tello.wait_for_connection(5)
         print("[info] [Tello_driver] - Connection to drone successfull")
+
+        # End
+        return

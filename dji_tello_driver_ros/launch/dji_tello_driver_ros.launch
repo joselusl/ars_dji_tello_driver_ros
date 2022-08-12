@@ -1,0 +1,27 @@
+<!-- -->
+<launch>
+
+    <arg name="dji_tello_driver_ros_node_name" default="dji_tello_driver_ros_node" />
+
+    <!-- Tello WiFi credentials-->
+    <arg name="connect_to_tello_wifi_auto" default="false" />
+    <arg name="tello_ssid" default="" if="$(eval arg('connect_to_tello_wifi_auto') == false)"/>
+    <arg name="tello_password" default="" />
+
+    <group ns="tello">
+        <node name="$(arg dji_tello_driver_ros_node_name)" pkg="dji_tello_driver_ros" type="dji_tello_driver_ros_node.py" output="screen">
+            <remap from="takeoff" to="takeoff" />
+            <remap from="land" to="land" />
+            <remap from="camera/image_raw" to="camera/image_raw" />
+            <remap from="flight_data" to="flight_data" />
+            <remap from="cmd_vel_stamped" to="cmd_vel_stamped" />
+            <remap from="flag_tello_control_enabled" to="flag_tello_control_enabled" />
+            <remap from="flip_control" to="flip_control" />
+
+            <param name="tello_ssid" value="$(arg tello_ssid)" type="string" />
+            <param name="tello_pw" value="$(arg tello_password)" type="string" />
+            <param name="connect_to_tello_wifi_auto" value="$(arg connect_to_tello_wifi_auto)" type="bool" />
+        </node>
+    </group>
+
+</launch>
