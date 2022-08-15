@@ -11,7 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
 
 catkin_package(
     DEPENDS
-    CATKIN_DEPENDS rospy std_msgs sensor_msgs geometry_msgs dji_tello_msgs
+    CATKIN_DEPENDS rospy std_msgs sensor_msgs geometry_msgs dji_tello_msgs ars_robot_msgs
     INCLUDE_DIRS
     LIBRARIES
 )

@@ -21,6 +21,8 @@ from geometry_msgs.msg import TwistStamped
 
 from dji_tello_msgs.msg import FlightData, FlipControl
 
+from ars_robot_msgs.msg import RobotStatus
+
 
 from tellopy import Tello
 
@@ -31,6 +33,12 @@ from utils import connect_wifi_device as cwd
 
 
 class DjiTelloDriverRos(object):
+
+    #
+    _tello = None
+
+    #
+    _cv_bridge = None
 
     #
     _frame_skip = 300  # - skip the first 300 frames to avoid inital lag
@@ -45,6 +53,14 @@ class DjiTelloDriverRos(object):
     tello_takeoff_sub = None
     tello_land_sub = None
     tello_flip_controll_sub = None
+
+    # Publishers
+    #
+    _image_pub = None
+    #
+    _flight_data_pub = None
+    #
+    robot_status_pub = None
 
     #
     flag_tello_control_enabled = None
@@ -68,8 +84,6 @@ class DjiTelloDriverRos(object):
 
     #
     _flight_data = None
-    #
-    fly_mode = None
     #
     _current_battery_percentage = 0
     
@@ -126,6 +140,8 @@ class DjiTelloDriverRos(object):
         self._image_pub = rospy.Publisher("camera/image_raw", Image, queue_size=1)
         #
         self._flight_data_pub = rospy.Publisher("flight_data", FlightData, queue_size=1)
+        #
+        self.robot_status_pub = rospy.Publisher("robot_status", RobotStatus, queue_size=1)
 
 
         # Subscribers
@@ -348,23 +364,48 @@ class DjiTelloDriverRos(object):
         flight_data.wifi_strength = data.wifi_strength
 
 
-        # Reading some parameters
-        # Flight data
+        # Storing Flight data
         self._flight_data = flight_data
 
+        # Publish Flight data
+        self._flight_data_pub.publish(flight_data)
+
+
+
+        # Reading some parameters
+        
         # Flight mode
         # 1: hovering
         # 6: landed
         # 11: taking-off
         # 12: landing
-        self.fly_mode = flight_data.fly_mode
+        robot_status_msgs = RobotStatus()
+
+        if(flight_data.fly_mode == 1):
+            # Hovering
+            robot_status_msgs.robot_status = robot_status_msgs.FLYING
+        elif(flight_data.fly_mode == 6):
+            # Landed
+            robot_status_msgs.robot_status = robot_status_msgs.LANDED
+        elif(flight_data.fly_mode == 11):
+            # Taking-off
+            robot_status_msgs.robot_status = robot_status_msgs.TAKING_OFF
+        elif(flight_data.fly_mode == 12):
+            # Landing
+            robot_status_msgs.robot_status = robot_status_msgs.LANDING
+        else:
+            # Unknown
+            robot_status_msgs.robot_status = robot_status_msgs.UNKNOWN
+
+        # Publish
+        self.robot_status_pub.publish(robot_status_msgs)
+
+
         
         # Battery percentage
         self._current_battery_percentage = flight_data.battery_percentage
 
 
-        # Publish Flight data
-        self._flight_data_pub.publish(flight_data)
 
         # End
         return
